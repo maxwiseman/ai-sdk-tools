@@ -8,83 +8,180 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-// Read the current version of a package
-function getPackageVersion(packageName) {
-  const packagePath = path.join(
+
+function getPackageJsonPath(packageName) {
+  return path.join(
     __dirname,
     "..",
     "packages",
     packageName,
     "package.json",
   );
-  const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+}
+
+// Read the current version of a package
+function getPackageVersion(packageName) {
+  const packageJson = JSON.parse(
+    fs.readFileSync(getPackageJsonPath(packageName), "utf8"),
+  );
   return packageJson.version;
 }
 
-// Define which packages depend on which other packages
-const packageDependencies = {
-  artifacts: ["store"],
-  devtools: ["store"],
+function readPackageJson(packageName) {
+  return JSON.parse(fs.readFileSync(getPackageJsonPath(packageName), "utf8"));
+}
+
+function writePackageJson(packageName, packageJson) {
+  fs.writeFileSync(
+    getPackageJsonPath(packageName),
+    `${JSON.stringify(packageJson, null, 2)}\n`,
+  );
+}
+
+function setDependency(packageJson, field, dependencyName, version) {
+  packageJson[field] = packageJson[field] || {};
+  packageJson[field][dependencyName] = version;
+}
+
+function removeDependency(packageJson, field, dependencyName) {
+  const section = packageJson[field];
+  if (!section || !Object.prototype.hasOwnProperty.call(section, dependencyName)) {
+    return false;
+  }
+  delete section[dependencyName];
+  if (Object.keys(section).length === 0) {
+    delete packageJson[field];
+  }
+  return true;
+}
+
+// Define which packages depend on which other packages and where those dependencies live during development
+const dependencyMatrix = {
+  artifacts: [
+    {
+      dependencyName: "@ai-sdk-tools/store",
+      versionFrom: "store",
+      sourceField: "devDependencies",
+      targetField: "dependencies",
+    },
+  ],
+  devtools: [
+    {
+      dependencyName: "@ai-sdk-tools/store",
+      versionFrom: "store",
+      sourceField: "devDependencies",
+      targetField: "dependencies",
+    },
+  ],
+  agents: [
+    {
+      dependencyName: "@ai-sdk-tools/debug",
+      versionFrom: "debug",
+      sourceField: "dependencies",
+      targetField: "dependencies",
+    },
+    {
+      dependencyName: "@ai-sdk-tools/memory",
+      versionFrom: "memory",
+      sourceField: "dependencies",
+      targetField: "dependencies",
+    },
+  ],
+  memory: [
+    {
+      dependencyName: "@ai-sdk-tools/debug",
+      versionFrom: "debug",
+      sourceField: "dependencies",
+      targetField: "dependencies",
+    },
+  ],
+  "ai-sdk-tools": [
+    {
+      dependencyName: "@ai-sdk-tools/agents",
+      versionFrom: "agents",
+      sourceField: "dependencies",
+      targetField: "dependencies",
+    },
+    {
+      dependencyName: "@ai-sdk-tools/artifacts",
+      versionFrom: "artifacts",
+      sourceField: "dependencies",
+      targetField: "dependencies",
+    },
+    {
+      dependencyName: "@ai-sdk-tools/cache",
+      versionFrom: "cache",
+      sourceField: "dependencies",
+      targetField: "dependencies",
+    },
+    {
+      dependencyName: "@ai-sdk-tools/devtools",
+      versionFrom: "devtools",
+      sourceField: "dependencies",
+      targetField: "dependencies",
+    },
+    {
+      dependencyName: "@ai-sdk-tools/memory",
+      versionFrom: "memory",
+      sourceField: "dependencies",
+      targetField: "dependencies",
+    },
+    {
+      dependencyName: "@ai-sdk-tools/store",
+      versionFrom: "store",
+      sourceField: "dependencies",
+      targetField: "dependencies",
+    },
+  ],
 };
 
-// Generate dynamic package configurations
-const packages = Object.entries(packageDependencies).map(
-  ([packageName, deps]) => {
-    const dependencies = {};
-    deps.forEach((dep) => {
-      dependencies[`@ai-sdk-tools/${dep}`] = `^${getPackageVersion(dep)}`;
-    });
-    return { name: packageName, dependencies };
-  },
-);
+function updatePackageJson(packageName, dependencyConfigs) {
+  const packageJson = readPackageJson(packageName);
 
-function updatePackageJson(packageName, dependencies) {
-  const packagePath = path.join(
-    __dirname,
-    "..",
-    "packages",
-    packageName,
-    "package.json",
+  dependencyConfigs.forEach(
+    ({ dependencyName, versionFrom, sourceField, targetField }) => {
+      const version = `^${getPackageVersion(versionFrom)}`;
+
+      if (sourceField !== targetField) {
+        if (
+          removeDependency(packageJson, sourceField, dependencyName)
+        ) {
+          console.log(
+            `  📦 Moved ${dependencyName} from ${sourceField} to ${targetField}`,
+          );
+        }
+      }
+
+      setDependency(packageJson, targetField, dependencyName, version);
+      console.log(`  📦 Set ${dependencyName} to version ${version}`);
+    },
   );
-  const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
 
-  // Move workspace dependencies from devDependencies to dependencies
-  for (const [depName, version] of Object.entries(dependencies)) {
-    if (packageJson.devDependencies?.[depName]) {
-      delete packageJson.devDependencies[depName];
-      console.log(`  📦 Moved ${depName} from devDependencies to dependencies`);
-    }
-    packageJson.dependencies = packageJson.dependencies || {};
-    packageJson.dependencies[depName] = version;
-    console.log(`  📦 Set ${depName} to version ${version}`);
-  }
-
-  fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  writePackageJson(packageName, packageJson);
   console.log(`✅ Updated ${packageName} dependencies for publishing`);
 }
 
-function restorePackageJson(packageName, dependencies) {
-  const packagePath = path.join(
-    __dirname,
-    "..",
-    "packages",
-    packageName,
-    "package.json",
+function restorePackageJson(packageName, dependencyConfigs) {
+  const packageJson = readPackageJson(packageName);
+
+  dependencyConfigs.forEach(
+    ({ dependencyName, sourceField, targetField }) => {
+      if (targetField !== sourceField) {
+        if (
+          removeDependency(packageJson, targetField, dependencyName)
+        ) {
+          console.log(
+            `  📦 Moved ${dependencyName} from ${targetField} to ${sourceField}`,
+          );
+        }
+      }
+
+      setDependency(packageJson, sourceField, dependencyName, "workspace:*");
+      console.log(`  📦 Set ${dependencyName} to workspace:*`);
+    },
   );
-  const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
 
-  // Move dependencies back to devDependencies as workspace dependencies
-  for (const [depName] of Object.entries(dependencies)) {
-    if (packageJson.dependencies?.[depName]) {
-      delete packageJson.dependencies[depName];
-      console.log(`  📦 Moved ${depName} from dependencies to devDependencies`);
-    }
-    packageJson.devDependencies = packageJson.devDependencies || {};
-    packageJson.devDependencies[depName] = "workspace:*";
-    console.log(`  📦 Set ${depName} to workspace:*`);
-  }
-
-  fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  writePackageJson(packageName, packageJson);
   console.log(`✅ Restored ${packageName} to development mode`);
 }
 
@@ -92,10 +189,14 @@ const command = process.argv[2];
 
 if (command === "prepare") {
   console.log("🚀 Preparing packages for publishing...");
-  packages.forEach((pkg) => updatePackageJson(pkg.name, pkg.dependencies));
+  Object.entries(dependencyMatrix).forEach(([packageName, configs]) => {
+    updatePackageJson(packageName, configs);
+  });
 } else if (command === "restore") {
   console.log("🔄 Restoring packages to development mode...");
-  packages.forEach((pkg) => restorePackageJson(pkg.name, pkg.dependencies));
+  Object.entries(dependencyMatrix).forEach(([packageName, configs]) => {
+    restorePackageJson(packageName, configs);
+  });
 } else {
   console.log("Usage: node pre-publish.js [prepare|restore]");
   process.exit(1);
